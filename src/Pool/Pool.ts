@@ -91,7 +91,3 @@ export class Pool implements IPool {
     this.workers = [];
   };
 }
-
-const pool = new Pool({ file: './out/workers/w.js', maxWorkers: availableParallelism() });
-
-pool.runWorker('input msg');

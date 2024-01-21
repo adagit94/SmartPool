@@ -1,34 +1,60 @@
 import { availableParallelism } from 'node:os';
 import { EventEmitter } from 'node:events';
-import { Worker } from 'node:worker_threads';
-import { IPool, PoolSettings, RemoveListener, RunWorker, SetListener, WorkerEvent, WorkerItem, WorkerTask } from './PoolTypes.js';
+import { BroadcastChannel, Worker } from 'node:worker_threads';
+import {
+  BroadcastMessage,
+  Clear,
+  GetMode,
+  IPool,
+  PoolMode,
+  PoolSettings,
+  RemoveListener,
+  RunWorker,
+  SetListener,
+  WorkerEvent,
+  WorkerItem,
+  WorkerTask,
+} from './PoolTypes.js';
 
 export class Pool implements IPool {
-  constructor(settings: PoolSettings) {
+  constructor({ file, maxWorkers, broadcasterId }: PoolSettings) {
     const logicalCoresCount = availableParallelism();
 
-    if (typeof settings.maxWorkers === 'number' && settings.maxWorkers > logicalCoresCount) {
+    if (typeof maxWorkers === 'number' && maxWorkers > logicalCoresCount) {
       throw new Error(
-        `Maximum number of workers must be less or equal to number of available logical cores.\r\nworkers: ${settings.maxWorkers}\r\nlogical cores: ${logicalCoresCount}`
+        `Maximum number of workers must be less or equal to number of available logical cores.\r\nworkers: ${maxWorkers}\r\nlogical cores: ${logicalCoresCount}`
       );
     }
 
-    this.settings = settings;
-    this.maxWorkers = settings.maxWorkers ?? logicalCoresCount;
+    this.file = file;
+    this.maxWorkers = maxWorkers ?? logicalCoresCount;
+    broadcasterId && (this.broadcaster = this.initBroadcaster(broadcasterId));
   }
 
-  private settings: PoolSettings;
+  private file: string | URL;
   private maxWorkers: number;
   private workers: WorkerItem[] = [];
   private tasks: WorkerTask[] = [];
   private eventEmitter = new EventEmitter();
+  private broadcaster: BroadcastChannel | undefined;
+  private cleared = false;
+
+  private initBroadcaster = (broadcasterId: string) => {
+    const broadcaster = new BroadcastChannel(broadcasterId);
+
+    broadcaster.onmessageerror = msg => {
+      this.eventEmitter.emit(WorkerEvent.BroadcasterMessageError, msg);
+    };
+
+    return broadcaster;
+  };
 
   private spawnWorker = () => {
-    const workerItem = { worker: new Worker(this.settings.file), available: true };
+    const workerItem = { worker: new Worker(this.file), available: true };
     const { worker } = workerItem;
 
     worker.on('message', msg => {
-      this.eventEmitter.emit(WorkerEvent.WorkerResult, msg);
+      this.eventEmitter.emit(WorkerEvent.WorkerMessage, msg);
 
       if (this.tasks.length > 0) {
         const task = this.tasks.shift();
@@ -61,6 +87,10 @@ export class Pool implements IPool {
   };
 
   public runWorker: RunWorker = (data, transfer = []) => {
+    if (this.cleared) {
+      throw new Error('Instance cleared and unusable.');
+    }
+
     let availableWorker = this.workers.find(w => w.available);
 
     if (availableWorker === undefined && this.workers.length < this.maxWorkers) {
@@ -75,6 +105,10 @@ export class Pool implements IPool {
     }
   };
 
+  public broadcastMessage: BroadcastMessage = data => {
+    this.broadcaster?.postMessage(data);
+  };
+
   public setListener: SetListener = (event, listener) => {
     this.eventEmitter.addListener(event, listener);
   };
@@ -83,11 +117,35 @@ export class Pool implements IPool {
     this.eventEmitter.removeListener(event, listener);
   };
 
-  public clear = () => {
-    for (const { worker } of this.workers) {
-      worker.terminate();
+  public clear: Clear = async () => {
+    const mode = this.getMode();
+
+    if (mode === PoolMode.Cleared) {
+      console.log('Already cleared.');
+      return false;
     }
 
-    this.workers = [];
+    if (mode === PoolMode.Active) {
+      console.log('Pending tasks.');
+      return false;
+    }
+
+    await Promise.all(this.workers.map(({ worker }) => worker.terminate()));
+    this.broadcaster?.close();
+    this.eventEmitter.removeAllListeners();
+
+    this.cleared = true;
+
+    return true;
+  };
+
+  public getMode: GetMode = () => {
+    if (this.cleared) return PoolMode.Cleared;
+
+    if (this.workers.every(({ available }) => available)) {
+      return PoolMode.Idle;
+    } else {
+      return PoolMode.Active;
+    }
   };
 }

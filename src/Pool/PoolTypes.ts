@@ -1,8 +1,15 @@
-import { Worker, TransferListItem } from "node:worker_threads";
+import { Worker, TransferListItem } from 'node:worker_threads';
 
 export enum WorkerEvent {
-  WorkerResult = "workerResult",
-  WorkerError = "workerError",
+  WorkerMessage = 'workerMessage',
+  WorkerError = 'workerError',
+  BroadcasterMessageError = "broadcasterMessageError"
+}
+
+export enum PoolMode {
+  Idle,
+  Active,
+  Cleared,
 }
 
 export type WorkerItem = {
@@ -12,22 +19,32 @@ export type WorkerItem = {
 
 export type WorkerTask = {
   data: any;
-  transfer: TransferListItem[]
+  transfer: TransferListItem[];
 };
 
 export type PoolSettings = {
   file: string | URL;
   maxWorkers?: number;
+  broadcasterId?: string;
 };
 
-export type RunWorker = (data: string, transfer?: TransferListItem[]) => unknown;
+export type RunWorker = (data: any, transfer?: TransferListItem[]) => void;
 
-export type SetListener =  (event: WorkerEvent, listener: (...args: any[]) => void) => void
+export type BroadcastMessage = (data: any) => void;
 
-export type RemoveListener =  (event: WorkerEvent, listener: (...args: any[]) => void) => void 
+export type SetListener = (event: WorkerEvent, listener: (...args: any[]) => void) => void;
+
+export type RemoveListener = (event: WorkerEvent, listener: (...args: any[]) => void) => void;
+
+export type Clear = () => Promise<boolean>;
+
+export type GetMode = () => PoolMode;
 
 export interface IPool {
   runWorker: RunWorker;
-  setListener: SetListener
-  removeListener: RemoveListener
+  broadcastMessage: BroadcastMessage;
+  setListener: SetListener;
+  removeListener: RemoveListener;
+  clear: Clear;
+  getMode: GetMode;
 }
